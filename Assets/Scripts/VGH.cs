@@ -12,6 +12,8 @@ public class VGH : MonoBehaviour {
     public TextMeshProUGUI errorMsg, vibrationStatus;
     public TMP_InputField addressInput;
     public Slider heavyHapticsSlider, lightHapticsSlider;
+    public TMP_Text resetButtonText;
+    public Button resetButton, confirmResetButton;
 
     private OscServer server;
     private bool haptics, hapticsChanged, gamepadWasConnected = true, on = true, changingSettings;
@@ -29,6 +31,10 @@ public class VGH : MonoBehaviour {
             return;
         }
 
+        LoadSettings();
+    }
+
+    private void LoadSettings() {
         OnChangedAddress(PlayerPrefs.GetString("address"));
         heavyHaptics = PlayerPrefs.GetFloat("heavyHaptics");
         lightHaptics = PlayerPrefs.GetFloat("lightHaptics");
@@ -100,13 +106,13 @@ public class VGH : MonoBehaviour {
     }
 
     public void OnChangedAddress(string address) {
+        this.address = address;
         if (lastAddress != null) {
             server.RemoveAddress(lastAddress);
             lastAddress = address;
         }
         if (address == null || address.Equals("")) return;
         server.TryAddMethod(address, ReadValues);
-        this.address = address;
     }
 
     public void OnChangedHeavyHaptics(float value) {
@@ -124,5 +130,22 @@ public class VGH : MonoBehaviour {
     public void OnEndDrag(BaseEventData eventData) {
         changingSettings = false;
         hapticsChanged = true;
+    }
+
+    public void OnReset() {
+        if (confirmResetButton.gameObject.activeInHierarchy) {
+            confirmResetButton.gameObject.SetActive(false);
+            resetButtonText.text = "Reset";
+        } else {
+            confirmResetButton.gameObject.SetActive(true);
+            resetButtonText.text = "No";
+        }
+    }
+
+    public void OnConfirmReset() {
+        OnReset();
+        PlayerPrefs.DeleteAll();
+        PlayerPrefs.Save();
+        LoadSettings();
     }
 }
