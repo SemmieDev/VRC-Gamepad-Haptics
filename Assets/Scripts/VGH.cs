@@ -6,6 +6,7 @@ using UnityEngine.InputSystem;
 using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using UnityEngine.Networking;
 
 public class VGH : MonoBehaviour {
     public GameObject errorDisplay;
@@ -13,7 +14,7 @@ public class VGH : MonoBehaviour {
     public TMP_InputField addressInput;
     public Slider heavyHapticsSlider, lightHapticsSlider;
     public TMP_Text resetButtonText;
-    public Button resetButton, confirmResetButton;
+    public Button resetButton, confirmResetButton, updateButton;
 
     private OscServer server;
     private bool haptics, hapticsChanged, gamepadWasConnected = true, on = true, changingSettings;
@@ -32,6 +33,23 @@ public class VGH : MonoBehaviour {
         }
 
         LoadSettings();
+
+        StartCoroutine(CheckForUpdate());
+    }
+
+    private IEnumerator CheckForUpdate() {
+        using (UnityWebRequest request = UnityWebRequest.Get("https://api.github.com/repos/SemmieDev/VRC-Gamepad-Haptics/releases/latest")) {
+            yield return request.SendWebRequest();
+
+            if (request.result != UnityWebRequest.Result.Success) {
+                Debug.LogError("Failed to request latest release: "+request.error);
+                yield break;
+            }
+
+            var latestRelease = JsonUtility.FromJson<LatestRelease>(request.downloadHandler.text);
+
+            if (!latestRelease.tag_name.Equals(Application.version)) updateButton.gameObject.SetActive(true);
+        }
     }
 
     private void LoadSettings() {
@@ -147,5 +165,19 @@ public class VGH : MonoBehaviour {
         PlayerPrefs.DeleteAll();
         PlayerPrefs.Save();
         LoadSettings();
+    }
+
+    public void OnUpdateClick() {
+        Application.OpenURL("https://github.com/SemmieDev/VRC-Gamepad-Haptics/releases/latest");
+        #if UNITY_EDITOR
+            UnityEditor.EditorApplication.isPlaying = false;
+        #else
+            Application.Quit();
+        #endif
+    }
+
+    [System.Serializable]
+    private class LatestRelease {
+        public string tag_name;
     }
 }
