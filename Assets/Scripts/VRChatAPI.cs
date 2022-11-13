@@ -8,6 +8,8 @@ using UnityEngine.UI;
 using TMPro;
 using System;
 using System.Threading;
+using System.Text.RegularExpressions;
+using System.Text;
 
 public class VRChatAPI : MonoBehaviour {
     public MonoBehaviour vghComponent;
@@ -21,7 +23,7 @@ public class VRChatAPI : MonoBehaviour {
     [HideInInspector] public User user;
     [HideInInspector] public Config config;
     public Button confirmResetButton;
-    public TMP_Text resetButtonText;
+    public TMP_Text resetButtonText, usernameInput, passwordInput;
     public Slider heavyHapticsSlider, lightHapticsSlider;
 
     private string authcookie;
@@ -48,12 +50,22 @@ public class VRChatAPI : MonoBehaviour {
         lightHapticsSlider.SetValueWithoutNotify(config.lightHaptics);
     }
 
-    public void OnEnterAuthCookie(string cookie) { // DEBUGGING, refactor
-        authcookie = cookie;
+    public void OnLogin() {
+        var encodedUsername = UnityWebRequest.EscapeURL(usernameInput.text);
+        var encodedPassword = UnityWebRequest.EscapeURL(passwordInput.text);
+
+        var request = UnityWebRequest.Get("https://api.vrchat.cloud/api/1/auth/user");
+        request.SetRequestHeader("Authorization", "Basic "+Convert.ToBase64String(Encoding.UTF8.GetBytes(encodedUsername+":"+encodedPassword)));
+        request.SendWebRequest();
+        while (!request.isDone) Thread.Sleep(100);
+        Debug.Log(request.downloadHandler.text);
+        return;
+        user = JsonUtility.FromJson<User>(request.downloadHandler.text);
+
+        authcookie = Regex.Match(request.GetResponseHeader("Set-Cookie"), "authcookie_[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}").Value;
         vghComponent.enabled = true;
         loginScreen.SetActive(false);
 
-        user = RequestJson<User>("https://api.vrchat.cloud/api/1/auth/user");
         InitalizeAvatar();
 
         ws = new WebSocket("wss://pipeline.vrchat.cloud/?authToken="+authcookie);
@@ -185,6 +197,10 @@ public class VRChatAPI : MonoBehaviour {
         LoadSettings();
         avatarChanged = true;
         newAvatarParameters = avatarParameters;
+    }
+
+    public void OnInfoClick() {
+        Application.OpenURL("https://github.com/SemmieDev/VRC-Gamepad-Haptics/wiki/How-your-account-is-used");
     }
 
     private void Save() {
