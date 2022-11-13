@@ -7,23 +7,20 @@ using TMPro;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using UnityEngine.Networking;
+using System;
 
 public class VGH : MonoBehaviour {
     public GameObject errorDisplay;
     public TextMeshProUGUI errorMsg, vibrationStatus;
-    public TMP_InputField addressInput;
-    public Slider heavyHapticsSlider, lightHapticsSlider;
-    public TMP_Text resetButtonText;
-    public Button resetButton, confirmResetButton, updateButton;
+    public Button updateButton;
+    public VRChatAPI vrchatApi;
 
     private OscServer server;
-    private bool haptics, hapticsChanged, gamepadWasConnected = true, on = true, changingSettings;
-    private string lastAddress, address;
-    private float heavyHaptics, lightHaptics, settingsChangeDelay;
+    private bool hapticsChanged, gamepadWasConnected = true, on = true, changingSettings;
+    private string address;
+    private float settingsChangeDelay, haptics;
 
     void Start() {
-        Application.targetFrameRate = 30;
-
         server = new OscServer(9001);
 
         if (server == null) {
@@ -32,9 +29,11 @@ public class VGH : MonoBehaviour {
             return;
         }
 
-        LoadSettings();
-
         StartCoroutine(CheckForUpdate());
+    }
+
+    public bool IsReady() {
+        return server != null;;
     }
 
     private IEnumerator CheckForUpdate() {
@@ -52,21 +51,28 @@ public class VGH : MonoBehaviour {
         }
     }
 
-    private void LoadSettings() {
-        OnChangedAddress(PlayerPrefs.GetString("address"));
-        heavyHaptics = PlayerPrefs.GetFloat("heavyHaptics");
-        lightHaptics = PlayerPrefs.GetFloat("lightHaptics");
-
-        addressInput.SetTextWithoutNotify(address);
-        heavyHapticsSlider.SetValueWithoutNotify(heavyHaptics);
-        lightHapticsSlider.SetValueWithoutNotify(lightHaptics);
-    }
-
     private void ReadValues(OscMessageValues values) {
-        var newHaptics = values.ReadBooleanElement(0);
-        if (newHaptics == haptics) return;
-        haptics = newHaptics;
-        hapticsChanged = true;
+        values.ForEachElement((index, typeTag) => {
+            float newHaptics;
+
+            if (typeTag == TypeTag.True) {
+                newHaptics = 1.0f;
+            } else if (typeTag == TypeTag.False) {
+                newHaptics = 0;
+            } else if (typeTag == TypeTag.Int32) {
+                newHaptics = values.ReadIntElementUnchecked(index) / 100f;
+            } else if (typeTag == TypeTag.Float32) {
+                newHaptics = values.ReadFloatElementUnchecked(index);
+            } else {
+                return;
+            }
+
+            newHaptics = Mathf.Min(1, Mathf.Max(0, newHaptics));
+
+            if (newHaptics == haptics) return;
+            haptics = newHaptics;
+            hapticsChanged = true;
+        });
     }
 
     private void SetError(string msg) {
@@ -93,15 +99,15 @@ public class VGH : MonoBehaviour {
         }
 
         if (changingSettings && (settingsChangeDelay += Time.deltaTime) >= 0.1) {
-            Gamepad.current.SetMotorSpeeds(heavyHaptics, lightHaptics);
+            Gamepad.current.SetMotorSpeeds(vrchatApi.config.heavyHaptics, vrchatApi.config.lightHaptics);
             settingsChangeDelay = 0;
         }
 
         if (!hapticsChanged || changingSettings) return;
         hapticsChanged = false;
 
-        if (haptics && on) {
-            Gamepad.current.SetMotorSpeeds(heavyHaptics, lightHaptics);
+        if (haptics > 0 && on) {
+            Gamepad.current.SetMotorSpeeds(vrchatApi.config.heavyHaptics * haptics, vrchatApi.config.lightHaptics * haptics);
             vibrationStatus.color = Color.green;
         } else {
             Gamepad.current.PauseHaptics();
@@ -110,35 +116,35 @@ public class VGH : MonoBehaviour {
     }
 
     void OnDestroy() {
-        if (server != null) {
-            server.Dispose();
-            PlayerPrefs.SetString("address", address);
-            PlayerPrefs.SetFloat("lightHaptics", lightHaptics);
-            PlayerPrefs.SetFloat("heavyHaptics", heavyHaptics);
-            PlayerPrefs.Save();
-        }
+        if (server != null) server.Dispose();
+    }
+
+    public void SetAddress(string newAddress) {
+        if (address != null) server.RemoveMethod(address, ReadValues);
+        address = newAddress;
+        if (newAddress != null) server.TryAddMethod(newAddress, ReadValues);
+        haptics = 0;
+        hapticsChanged = true;
     }
 
     public void OnToggled(bool on) {
         this.on = on;
     }
 
-    public void OnChangedAddress(string address) {
-        this.address = address;
-        if (lastAddress != null) {
-            server.RemoveAddress(lastAddress);
-            lastAddress = address;
-        }
-        if (address == null || address.Equals("")) return;
-        server.TryAddMethod(address, ReadValues);
+    public void OnChangedAddress(int index) {
+        index = index - 1;
+        var address = index < 0 ? null : vrchatApi.avatarParameters.parameters[index].output.address;
+        vrchatApi.config.storedAvatarAddresses.Remove(vrchatApi.user.currentAvatar);
+        vrchatApi.config.storedAvatarAddresses.Add(vrchatApi.user.currentAvatar, address);
+        SetAddress(address);
     }
 
     public void OnChangedHeavyHaptics(float value) {
-        heavyHaptics = value;
+        vrchatApi.config.heavyHaptics = value;
     }
 
     public void OnChangedLightHaptics(float value) {
-        lightHaptics = value;
+        vrchatApi.config.lightHaptics = value;
     }
 
     public void OnBeginDrag(BaseEventData eventData) {
@@ -150,23 +156,6 @@ public class VGH : MonoBehaviour {
         hapticsChanged = true;
     }
 
-    public void OnReset() {
-        if (confirmResetButton.gameObject.activeInHierarchy) {
-            confirmResetButton.gameObject.SetActive(false);
-            resetButtonText.text = "Reset";
-        } else {
-            confirmResetButton.gameObject.SetActive(true);
-            resetButtonText.text = "No";
-        }
-    }
-
-    public void OnConfirmReset() {
-        OnReset();
-        PlayerPrefs.DeleteAll();
-        PlayerPrefs.Save();
-        LoadSettings();
-    }
-
     public void OnUpdateClick() {
         Application.OpenURL("https://github.com/SemmieDev/VRC-Gamepad-Haptics/releases/latest");
         #if UNITY_EDITOR
@@ -176,7 +165,7 @@ public class VGH : MonoBehaviour {
         #endif
     }
 
-    [System.Serializable]
+    [Serializable]
     private class LatestRelease {
         public string tag_name;
     }
