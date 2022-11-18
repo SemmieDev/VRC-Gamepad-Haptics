@@ -23,20 +23,31 @@ public class VRChatAPI : MonoBehaviour {
     [HideInInspector] public User user;
     [HideInInspector] public Config config;
     public Button confirmResetButton;
-    public TMP_Text resetButtonText, usernameInput, passwordInput;
+    public TMP_Text resetButtonText, errorResponse;
     public Slider heavyHapticsSlider, lightHapticsSlider;
+    public TMP_InputField usernameInput, passwordInput, input2fa;
 
-    private string authcookie;
+    private Auth auth;
     private WebSocket ws;
     private readonly string appdata = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-    private string configPath;
+    private string configPath, authCachePath;
     private AvatarParameters newAvatarParameters;
-    private bool avatarChanged;
+    private bool avatarChanged, twoFactorAuth;
 
     void Start() {
         Application.targetFrameRate = 30;
         configPath = Path.Combine(Application.persistentDataPath, "config.json");
+        authCachePath = Path.Combine(Application.persistentDataPath, "auth.json");
         LoadSettings();
+        UnityWebRequest.ClearCookieCache();
+
+        if (File.Exists(authCachePath)) {
+            auth = JsonUtility.FromJson<Auth>(File.ReadAllText(authCachePath));
+            SetCurrentUser();
+            if (user != null) ContinueLogin();
+        } else {
+            auth = new Auth();
+        }
     }
 
     private void LoadSettings() {
@@ -51,24 +62,81 @@ public class VRChatAPI : MonoBehaviour {
     }
 
     public void OnLogin() {
+        UnityWebRequest request;
+        if (twoFactorAuth) {
+            var code = input2fa.text;
+
+            // Fuck you unity (unity url encodes the data so I have to do this)
+            request = new UnityWebRequest("https://api.vrchat.cloud/api/1/auth/twofactorauth/totp/verify");
+            request.uploadHandler = new UploadHandlerRaw(("{\"code\":\""+code+"\"}").GetUTF8EncodedBytes()); // {"code":"string"}
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.method = UnityWebRequest.kHttpVerbPOST;
+            request.SetRequestHeader("Content-Type", "application/json");
+            request.SetRequestHeader("Cookie", "auth="+auth.authcookie);
+            request.SendWebRequest();
+            while (!request.isDone) Thread.Sleep(100);
+
+            if (request.result == UnityWebRequest.Result.ProtocolError) {
+                var errorResponse = JsonUtility.FromJson<ErrorResponse>(request.downloadHandler.text);
+                SetErrorResponse(errorResponse.error.message);
+                return;
+            }
+
+            SetCurrentUser();
+            ContinueLogin();
+
+            return;
+        }
+
         var encodedUsername = UnityWebRequest.EscapeURL(usernameInput.text);
         var encodedPassword = UnityWebRequest.EscapeURL(passwordInput.text);
 
-        var request = UnityWebRequest.Get("https://api.vrchat.cloud/api/1/auth/user");
+        request = UnityWebRequest.Get("https://api.vrchat.cloud/api/1/auth/user");
         request.SetRequestHeader("Authorization", "Basic "+Convert.ToBase64String(Encoding.UTF8.GetBytes(encodedUsername+":"+encodedPassword)));
         request.SendWebRequest();
         while (!request.isDone) Thread.Sleep(100);
-        Debug.Log(request.downloadHandler.text);
-        return;
+
+        if (request.result == UnityWebRequest.Result.ProtocolError) {
+            var errorResponse = JsonUtility.FromJson<ErrorResponse>(request.downloadHandler.text);
+            SetErrorResponse(errorResponse.error.message);
+            return;
+        }
+
         user = JsonUtility.FromJson<User>(request.downloadHandler.text);
 
-        authcookie = Regex.Match(request.GetResponseHeader("Set-Cookie"), "authcookie_[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}").Value;
+        auth.authcookie = Regex.Match(request.GetResponseHeader("Set-Cookie"), "authcookie_[0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}").Value;
+
+        if (user.requiresTwoFactorAuth != null) {
+            usernameInput.gameObject.SetActive(false);
+            passwordInput.gameObject.SetActive(false);
+            input2fa.gameObject.SetActive(true);
+            twoFactorAuth = true;
+            SetErrorResponse("");
+            return;
+        }
+
+        ContinueLogin();
+    }
+
+    private void SetCurrentUser() {
+        var request = UnityWebRequest.Get("https://api.vrchat.cloud/api/1/auth/user");
+        request.SetRequestHeader("Cookie", "apiKey=JlE5Jldo5Jibnk5O5hTx6XVqsJu4WJ26; auth="+auth.authcookie);
+        request.SendWebRequest();
+        while (!request.isDone) Thread.Sleep(100);
+        if (request.result == UnityWebRequest.Result.ProtocolError) {
+            user = null;
+            return;
+        }
+        user = JsonUtility.FromJson<User>(request.downloadHandler.text);
+    }
+
+    private void ContinueLogin() {
         vghComponent.enabled = true;
         loginScreen.SetActive(false);
 
         InitalizeAvatar();
 
-        ws = new WebSocket("wss://pipeline.vrchat.cloud/?authToken="+authcookie);
+        ws = new WebSocket("wss://pipeline.vrchat.cloud/?authToken="+auth.authcookie);
 
         ws.OnError += (ignored, msg) => {
             Debug.LogError("Web socket error: "+msg.Message+"\nWeb socket exception: "+msg.Exception.ToString());
@@ -93,6 +161,11 @@ public class VRChatAPI : MonoBehaviour {
         //LoadAvatars();
     }
 
+    private void SetErrorResponse(string error) {
+        errorResponse.gameObject.SetActive(true);
+        errorResponse.text = error;
+    }
+
     private void InitalizeAvatar() {
         try {
             string avatarParametersJson = File.ReadAllText(appdata+"\\..\\LocalLow\\VRChat\\VRChat\\OSC\\"+user.id+"\\Avatars\\"+user.currentAvatar+".json");
@@ -103,20 +176,20 @@ public class VRChatAPI : MonoBehaviour {
         avatarChanged = true;
     }
 
-    private UnityWebRequest GetWebRequest(string uri, bool auth) {
-        var request = UnityWebRequest.Get(uri);
-        string cookies = "apiKey=JlE5Jldo5Jibnk5O5hTx6XVqsJu4WJ26";
-        if (auth) cookies += "; auth="+authcookie;
-        request.SetRequestHeader("Cookie", cookies);
-        return request;
-    }
+    // private UnityWebRequest GetWebRequest(string uri, bool auth) {
+    //     var request = UnityWebRequest.Get(uri);
+    //     string cookies = "apiKey=JlE5Jldo5Jibnk5O5hTx6XVqsJu4WJ26";
+    //     if (auth) cookies += "; auth="+authcookie;
+    //     request.SetRequestHeader("Cookie", cookies);
+    //     return request;
+    // }
 
-    private T RequestJson<T>(string uri) {
-        var request = GetWebRequest(uri, true);
-        request.SendWebRequest();
-        while (!request.isDone) Thread.Sleep(100);
-        return JsonUtility.FromJson<T>(request.downloadHandler.text);
-    }
+    // private T RequestJson<T>(string uri) {
+    //     var request = GetWebRequest(uri, true);
+    //     request.SendWebRequest();
+    //     while (!request.isDone) Thread.Sleep(100);
+    //     return JsonUtility.FromJson<T>(request.downloadHandler.text);
+    // }
 
     // private JSONArrayWrapper<T> FromJsonArray<T>(string json) {
     //     return JsonUtility.FromJson<JSONArrayWrapper<T>>("{\"array\":"+json+"}");
@@ -205,6 +278,7 @@ public class VRChatAPI : MonoBehaviour {
 
     private void Save() {
         File.WriteAllText(configPath, JsonUtility.ToJson(config));
+        File.WriteAllText(authCachePath, JsonUtility.ToJson(auth));
     }
 
     // [System.Serializable]
@@ -255,6 +329,7 @@ public class VRChatAPI : MonoBehaviour {
     public class User {
         public string currentAvatar;
         public string id;
+        public string[] requiresTwoFactorAuth;
     }
 
     [Serializable]
@@ -288,5 +363,20 @@ public class VRChatAPI : MonoBehaviour {
 
             for (int i = 0; i < keys.Count; i++) Add(keys[i], values[i]);
         }
+    }
+
+    [Serializable]
+    public class ErrorResponse {
+        public Error error;
+
+        [Serializable]
+        public class Error {
+            public string message;
+        }
+    }
+    
+    [Serializable]
+    public class Auth {
+        public string authcookie;
     }
 }
