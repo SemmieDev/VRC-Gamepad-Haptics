@@ -71,6 +71,7 @@ public class VRChatAPI : MonoBehaviour {
             request.uploadHandler = new UploadHandlerRaw(("{\"code\":\""+code+"\"}").GetUTF8EncodedBytes()); // {"code":"string"}
             request.downloadHandler = new DownloadHandlerBuffer();
             request.method = UnityWebRequest.kHttpVerbPOST;
+            request.SetRequestHeader("User-Agent", "VRChatGamepadHaptics/"+Application.version+" semvdmeij124@gmail.com");
             request.SetRequestHeader("Content-Type", "application/json");
             request.SetRequestHeader("Cookie", "auth="+auth.authcookie);
             request.SendWebRequest();
@@ -92,6 +93,7 @@ public class VRChatAPI : MonoBehaviour {
         var encodedPassword = UnityWebRequest.EscapeURL(passwordInput.text);
 
         request = UnityWebRequest.Get("https://api.vrchat.cloud/api/1/auth/user");
+        request.SetRequestHeader("User-Agent", "VRChatGamepadHaptics/"+Application.version+" semvdmeij124@gmail.com");
         request.SetRequestHeader("Authorization", "Basic "+Convert.ToBase64String(Encoding.UTF8.GetBytes(encodedUsername+":"+encodedPassword)));
         request.SendWebRequest();
         while (!request.isDone) Thread.Sleep(100);
@@ -120,6 +122,7 @@ public class VRChatAPI : MonoBehaviour {
 
     private void SetCurrentUser() {
         var request = UnityWebRequest.Get("https://api.vrchat.cloud/api/1/auth/user");
+        request.SetRequestHeader("User-Agent", "VRChatGamepadHaptics/"+Application.version+" semvdmeij124@gmail.com");
         request.SetRequestHeader("Cookie", "apiKey=JlE5Jldo5Jibnk5O5hTx6XVqsJu4WJ26; auth="+auth.authcookie);
         request.SendWebRequest();
         while (!request.isDone) Thread.Sleep(100);
@@ -136,7 +139,8 @@ public class VRChatAPI : MonoBehaviour {
 
         InitalizeAvatar();
 
-        ws = new WebSocket("wss://pipeline.vrchat.cloud/?authToken="+auth.authcookie);
+        //TODO: VRChat removed this feature, add a refresh button
+        /*ws = new WebSocket("wss://vrchat.com/?authToken="+auth.authcookie);
 
         ws.OnError += (ignored, msg) => {
             Debug.LogError("Web socket error: "+msg.Message+"\nWeb socket exception: "+msg.Exception.ToString());
@@ -153,7 +157,7 @@ public class VRChatAPI : MonoBehaviour {
             InitalizeAvatar();
         };
 
-        ws.Connect();
+        ws.Connect();*/
 
         //var userJson = RequestJson("https://api.vrchat.cloud/api/1/auth/user");
         //user = JsonUtility.FromJson<User>(userJson);
